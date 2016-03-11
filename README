@@ -1,0 +1,23 @@
+Sample programs used to create container based on Linux namespace.
+ref : http://coolshell.cn/articles/17010.html
+
+1) clone.c
+This demonstrate the clone system call.
+
+2) uts.c
+This demonstrate the UTS namespace.
+
+3) pid.c
+This demonstrate the PID namespace.
+
+4) mount.c
+This demonstrate the mount namespace.
+
+5) ipc.c
+This demonstrate the ipc namespace.
+
+6) mountRootfs.c
+This demonstrate the mount namespace and chroot.
+
+7) user.c
+This demonstrate the user namespace.
