@@ -1,4 +1,6 @@
+// Requires GNU extensions
 #define _GNU_SOURCE
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
@@ -8,6 +10,9 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <string.h>
+#include <sys/types.h>
+#include <pwd.h>
+#include <grp.h>
 
 #define STACK_SIZE (1024 * 1024)
 #define MAX_ARGV_SIZE 256
@@ -15,13 +20,14 @@
 #define MAX_VOL_COUNT 256
 
 char container_stack[STACK_SIZE];
-const char* short_options = "f:h:c:e:v:";
+const char* short_options = "f:h:c:e:v:u:";
 const struct option long_options[] = {
   {"rootfs",  required_argument, NULL, 'f'},
   {"hostname", optional_argument, NULL, 'h'},
   {"command", optional_argument, NULL, 'c'},
   {"environment", optional_argument, NULL, 'e'},
   {"volume", optional_argument, NULL, 'v'},
+  {"user", optional_argument, NULL, 'u'},
   {0, 0, 0, 0 }
 };
 
@@ -111,6 +117,9 @@ void set_hostname(char *hostname) {
 }
 
 int container_main(void* arg) {
+  char ch;
+  close(pipefd[1]);
+  read(pipefd[0], &ch, 1);
   set_hostname(hostname);
   set_default_mount(rootfs);
   return execvpe(container_args[0], container_args, env);
@@ -123,6 +132,12 @@ int main(int argc, char **argv) {
   int i = 0;
   int envI = 0;
   int vI = 0;
+  char* user;
+  char* group;
+  long int uid = 0;
+  long int gid = 0;
+  struct passwd *result;
+  struct group *result2;
 
   while (1) {
     int c = getopt_long(argc, argv, short_options, long_options, &option_index);
@@ -149,10 +164,29 @@ int main(int argc, char **argv) {
       case 'v':
         vol[vI++] = optarg;
         vol[vI] = NULL;
+        break;
+      case 'u':
+        user = strtok(optarg, ":");
+        group = strtok(optarg, ":");
+        uid = strtol(user, NULL, 10);
+        gid = strtol(group, NULL, 10);
+
+        if (uid == 0L) {
+          result = getpwnam(user);
+          uid = result->pw_uid;
+          if (gid == 0L) {
+            if (group == "" ) {
+              gid = result->pw_gid;
+            } else {
+              result2 = getgrnam(group);
+              gid = result2->gr_gid;
+            }
+          }
+        }
+        break;
       case '?':
         break;
       default:
-        printf("?? getopt returned character code 0%o ??\n", c);
         break;
     }
   }
@@ -162,7 +196,7 @@ int main(int argc, char **argv) {
   if (!hostname) {
     hostname = "container";
   }
-  if (sizeof(container_args) == 0 ) {
+  if (container_args[0] == NULL ) {
     container_args[0] = "/bin/bash";
     container_args[1] = NULL;
   }
@@ -171,13 +205,15 @@ int main(int argc, char **argv) {
   clone_flag = clone_flag | CLONE_NEWIPC;
   clone_flag = clone_flag | CLONE_NEWUTS;
   clone_flag = clone_flag | CLONE_NEWNET;
+  clone_flag = clone_flag | CLONE_NEWUSER;
 
   pipe(pipefd);
 
   int container_pid = clone(container_main, container_stack + STACK_SIZE,
       clone_flag, NULL);
-  set_uid_map(container_pid, 0, getuid(), 1);
-  set_gid_map(container_pid, 0, getgid(), 1);
+  printf("container_pid %d uid %d gid %d\n", container_pid, (int) uid, (int) gid);
+  set_uid_map(container_pid, (int) uid, getuid(), 1);
+  set_gid_map(container_pid, (int) gid, getgid(), 1);
 
   close(pipefd[1]);
 
