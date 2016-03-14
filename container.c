@@ -23,11 +23,11 @@ char container_stack[STACK_SIZE];
 const char* short_options = "f:h:c:e:v:u:";
 const struct option long_options[] = {
   {"rootfs",  required_argument, NULL, 'f'},
-  {"hostname", optional_argument, NULL, 'h'},
-  {"command", optional_argument, NULL, 'c'},
-  {"environment", optional_argument, NULL, 'e'},
-  {"volume", optional_argument, NULL, 'v'},
-  {"user", optional_argument, NULL, 'u'},
+  {"hostname", required_argument, NULL, 'h'},
+  {"command", required_argument, NULL, 'c'},
+  {"environment", required_argument, NULL, 'e'},
+  {"volume", required_argument, NULL, 'v'},
+  {"user", required_argument, NULL, 'u'},
   {0, 0, 0, 0 }
 };
 
