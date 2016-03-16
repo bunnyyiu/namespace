@@ -1,2 +1,11 @@
-Sample programs used to study Linux namespace.
+A simple program used to study Linux namespace.
 ref : http://coolshell.cn/articles/17010.html
+
+To compile
+gcc container.c -o container
+
+To build rootfs
+./buildRootfs.sh
+
+To run
+sudo ./container -f rootfs -c /bin/bash -v tmp:tmp
