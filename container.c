@@ -66,7 +66,7 @@ void set_gid_map(pid_t pid, int inside_id, int outside_id, int len) {
 }
 
 void set_default_mount(char *rootfsPath) {
-  char buf[65535];
+  char buf[256];
   //remount "/proc" to make sure the "top" and "ps" show container's information
   snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "proc");
   if (mount("proc", buf, "proc", 0, NULL) != 0) {
@@ -100,8 +100,9 @@ void set_default_mount(char *rootfsPath) {
   int vI = 0;
   while (vol[vI] != NULL) {
     char *src = strtok(vol[vI], ":");
-    char *target = strtok(vol[vI], ":");
+    char *target = strtok(NULL, ":");
     snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, target);
+    printf("mount %s to %s %s\n", src, target, buf);
     if (mount(src, buf, "none", MS_BIND, NULL) != 0) {
       perror(vol[vI]);
     }
@@ -167,7 +168,7 @@ int main(int argc, char **argv) {
         break;
       case 'u':
         user = strtok(optarg, ":");
-        group = strtok(optarg, ":");
+        group = strtok(NULL, ":");
         uid = strtol(user, NULL, 10);
         gid = strtol(group, NULL, 10);
 
@@ -211,7 +212,6 @@ int main(int argc, char **argv) {
 
   int container_pid = clone(container_main, container_stack + STACK_SIZE,
       clone_flag, NULL);
-  printf("container_pid %d uid %d gid %d\n", container_pid, (int) uid, (int) gid);
   set_uid_map(container_pid, (int) uid, getuid(), 1);
   set_gid_map(container_pid, (int) gid, getgid(), 1);
 

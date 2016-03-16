@@ -7,5 +7,13 @@ gcc container.c -o container
 To build rootfs
 ./buildRootfs.sh
 
+To create COW image
+mkdir upper workdir containerRoot
+sudo mount -t overlay overlay -olowerdir=rootfs,upperdir=upper,workdir=workdir containerRoot
+
+To create a shared home directory to container
+mkdir homeShare
+cd homeShare;touch a_shared_file
+
 To run
-sudo ./container -f rootfs -c /bin/bash -v tmp:tmp
+sudo ./container -f containerRoot -c /bin/bash -v homeShare:home -u root:root -h container
