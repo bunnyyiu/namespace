@@ -1,17 +1,16 @@
 // Requires GNU extensions
 #define _GNU_SOURCE
 
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
-#include <sys/types.h>
 #include <uuid/uuid.h>
+#include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sched.h>
 #include <signal.h>
 #include <unistd.h>
 #include <getopt.h>
-#include <string.h>
 #include <pwd.h>
 #include <grp.h>
 
@@ -21,10 +20,9 @@
 #define MAX_VOL_COUNT 256
 #define MAX_PATH_LENGTH 256
 #define MAX_COMMAND_LENGTH 65536
-#define UUID_LEN 37
+#define UUID_LENGTH 37
 #define MAX_COMMAND_ARG_LENGTH 128
 
-char container_stack[STACK_SIZE];
 const char* short_options = "f:h:c:e:v:u:m:s:p:q:";
 const struct option long_options[] = {
   {"rootfs",  required_argument, NULL, 'f'},
@@ -40,25 +38,22 @@ const struct option long_options[] = {
   {0, 0, 0, 0 }
 };
 
-char* hostname = "";
-
-char* rootfs = "";
-
-char* memory = "";
-
-char* cpu_shares = "";
-
-char* cpu_period = "";
-
-char* cpu_quota = "";
-
-char* container_args[MAX_ARGV_SIZE] = {NULL};
-
-char *env[MAX_ENV_SIZE] = {NULL};
-
-char *vol[MAX_VOL_COUNT] = {NULL};
-
 int pipefd[2];
+
+struct Config {
+  char* hostname;
+  char* rootfs;
+  char* memory;
+  char* cpu_shares;
+  char* cpu_period;
+  char* cpu_quota;
+  char* container_args[MAX_ARGV_SIZE];
+  char* environment[MAX_ENV_SIZE];
+  char* volume[MAX_VOL_COUNT];
+  char uuid[UUID_LENGTH];
+  long int uid;
+  long int gid;
+} config;
 
 void generate_uuid(char* uuid) {
   uuid_t out;
@@ -91,44 +86,44 @@ void set_gid_map(pid_t pid, int inside_id, int outside_id, int len) {
 void set_default_mount(char *rootfsPath) {
   char buf[MAX_PATH_LENGTH];
   //remount "/proc" to make sure the "top" and "ps" show container's information
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "proc");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "proc");
   if (mount("proc", buf, "proc", 0, NULL) != 0) {
     perror("proc");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "sys");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "sys");
   if (mount("sysfs", buf, "sysfs", 0, NULL) != 0) {
     perror("sys");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "tmp");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "tmp");
   if (mount("none", buf, "tmpfs", 0, NULL) != 0) {
     perror("tmp");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "dev");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "dev");
   if (mount("udev", buf, "devtmpfs", 0, NULL) != 0) {
     perror("dev");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "dev/pts");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "dev/pts");
   if (mount("devpts", buf, "devpts", 0, NULL) != 0) {
     perror("dev/pts");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "dev/shm");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "dev/shm");
   if (mount("shm", buf, "tmpfs", 0, NULL) != 0) {
     perror("dev/shm");
   }
-  snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "run");
+  snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, "run");
   if (mount("tmpfs", buf, "tmpfs", 0, NULL) != 0) {
     perror("run");
   }
 
-  int vI = 0;
-  while (vol[vI] != NULL) {
-    char *src = strtok(vol[vI], ":");
+  int volI = 0;
+  while (config.volume[volI] != NULL) {
+    char *src = strtok(config.volume[volI], ":");
     char *target = strtok(NULL, ":");
-    snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, target);
+    snprintf(buf, MAX_PATH_LENGTH, "%s/%s", rootfsPath, target);
     if (mount(src, buf, "none", MS_BIND, NULL) != 0) {
-      perror(vol[vI]);
+      perror(config.volume[volI]);
     }
-    vI++;
+    volI++;
   }
   if (chdir(rootfsPath) != 0 || chroot("./") != 0 ){
     perror("chdir/chroot");
@@ -160,7 +155,7 @@ int set_cgroup(char* cgroupScript, char* uuid,int pid, char* memory,
   return system(command);
 }
 
-void set_hostname(char *hostname) {
+void set_hostname(char* hostname) {
   sethostname(hostname, strlen(hostname));
 }
 
@@ -170,29 +165,42 @@ int container_main(void* arg) {
   close(pipefd[1]);
   read(pipefd[0], &ch, 1);
 
-  set_default_mount(rootfs);
-  set_hostname(hostname);
+  set_default_mount(config.rootfs);
+  set_hostname(config.hostname);
 
   // unshare the host user namespace after mounting /dev
   unshare(CLONE_NEWUSER);
-  //return execvpe(container_args[0], container_args, env);
-  return execv(container_args[0], container_args);
+  return execvpe(config.container_args[0], config.container_args,
+      config.environment);
 }
 
-int main(int argc, char ** argv) {
-  int clone_flag = SIGCHLD;
+void init_default_values() {
+  config.hostname = "";
+  config.rootfs = "";
+  config.memory = "";
+  config.cpu_shares = "";
+  config.cpu_period = "";
+  config.cpu_quota = "";
+  config.container_args[0] = NULL;
+  config.environment[0] = NULL;
+  config.volume[0] = NULL;
+  config.uid = 0;
+  config.gid = 0;
+}
 
-  int option_index = 0;
+int main(int argc, char* argv[]) {
+  int clone_flag = SIGCHLD;
   int i = 0;
   int envI = 0;
-  int vI = 0;
+  int volI = 0;
   char* user;
   char* group;
-  long int uid = 0;
-  long int gid = 0;
-  struct passwd *passwdResult;
-  struct group *groupResult;
+  struct passwd* passwdResult;
+  struct group* groupResult;
 
+  init_default_values();
+
+  int option_index = 0;
   while (1) {
     int c = getopt_long(argc, argv, short_options, long_options,
         &option_index);
@@ -201,54 +209,54 @@ int main(int argc, char ** argv) {
     }
     switch (c) {
       case 'f':
-        rootfs = optarg;
+        config.rootfs = optarg;
         break;
       case 'h':
-        hostname = optarg;
+        config.hostname = optarg;
         break;
       case 'c':
-        container_args[i] = strtok(optarg," ");
-        while(container_args[i] != NULL) {
-          container_args[++i] = strtok(NULL," ");
+        config.container_args[i] = strtok(optarg," ");
+        while(config.container_args[i] != NULL) {
+          config.container_args[++i] = strtok(NULL," ");
         }
         break;
       case 'e':
-        env[envI++] = optarg;
-        env[envI] = NULL;
+        config.environment[envI] = optarg;
+        config.environment[++envI] = NULL;
         break;
       case 'v':
-        vol[vI++] = optarg;
-        vol[vI] = NULL;
+        config.volume[volI] = optarg;
+        config.volume[++volI] = NULL;
         break;
       case 'm':
-        memory = optarg;
+        config.memory = optarg;
         break;
       case 's':
-        cpu_shares = optarg;
+        config.cpu_shares = optarg;
         break;
       case 'p':
-        cpu_period = optarg;
+        config.cpu_period = optarg;
         break;
       case 'q':
-        cpu_quota = optarg;
+        config.cpu_quota = optarg;
         break;
       case 'u':
         user = strtok(optarg, ":");
         group = strtok(NULL, ":");
-        uid = strtol(user, NULL, 10);
-        gid = strtol(group, NULL, 10);
+        config.uid = strtol(user, NULL, 10);
+        config.gid = strtol(group, NULL, 10);
 
-        if (uid == 0L) {
+        if (config.uid == 0L) {
           // Search in /etc/passwd
           passwdResult = getpwnam(user);
-          uid = passwdResult->pw_uid;
-          if (gid == 0L) {
-            if (group == "" ) {
-              gid = passwdResult->pw_gid;
+          config.uid = passwdResult->pw_uid;
+          if (config.gid == 0L) {
+            if (strcmp("", group)) {
+              config.gid = passwdResult->pw_gid;
             } else {
               // Search in /etc/group
               groupResult = getgrnam(group);
-              gid = groupResult->gr_gid;
+              config.gid = groupResult->gr_gid;
             }
           }
         }
@@ -259,15 +267,15 @@ int main(int argc, char ** argv) {
         break;
     }
   }
-  if (!rootfs) {
-    rootfs = "./rootfs";
+  if (strcmp("", config.rootfs)) {
+    config.rootfs = "./rootfs";
   }
-  if (!hostname) {
-    hostname = "container";
+  if (strcmp("", config.hostname)) {
+    config.hostname = "container";
   }
-  if (container_args[0] == NULL ) {
-    container_args[0] = "/bin/bash";
-    container_args[1] = NULL;
+  if (config.container_args[0] == NULL ) {
+    config.container_args[0] = "/bin/bash";
+    config.container_args[1] = NULL;
   }
   clone_flag = clone_flag | CLONE_NEWNS;
   clone_flag = clone_flag | CLONE_NEWPID;
@@ -277,21 +285,21 @@ int main(int argc, char ** argv) {
 
   pipe(pipefd);
 
-  char uuid[37];
-  generate_uuid(uuid);
+  generate_uuid(config.uuid);
 
+  char container_stack[STACK_SIZE];
   int container_pid = clone(container_main, container_stack + STACK_SIZE,
       clone_flag, NULL);
-  set_uid_map(container_pid, (int) uid, getuid(), 1);
-  set_gid_map(container_pid, (int) gid, getgid(), 1);
+  set_uid_map(container_pid, (int) config.uid, getuid(), 1);
+  set_gid_map(container_pid, (int) config.gid, getgid(), 1);
 
-  int cgroupExitCode = set_cgroup("./cgroup.sh",uuid, container_pid,
-      memory, cpu_shares, cpu_period, cpu_quota);
+  int cgroupExitCode = set_cgroup("./cgroup.sh",config.uuid, container_pid,
+      config.memory, config.cpu_shares, config.cpu_period, config.cpu_quota);
   if (cgroupExitCode != 0) {
     printf("Fail to set cgroup\n");
     return 1;
   }
-  printf("Container PID : %d, UUID : %s\n", container_pid, uuid);
+  printf("Container PID : %d, UUID : %s\n", container_pid, config.uuid);
 
   close(pipefd[1]);
 
