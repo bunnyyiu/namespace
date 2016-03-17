@@ -4,13 +4,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/mount.h>
+#include <sys/types.h>
+#include <uuid/uuid.h>
 #include <stdio.h>
 #include <sched.h>
 #include <signal.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <string.h>
-#include <sys/types.h>
 #include <pwd.h>
 #include <grp.h>
 
@@ -19,9 +20,12 @@
 #define MAX_ENV_SIZE 256
 #define MAX_VOL_COUNT 256
 #define MAX_PATH_LENGTH 256
+#define MAX_COMMAND_LENGTH 65536
+#define UUID_LEN 37
+#define MAX_COMMAND_ARG_LENGTH 128
 
 char container_stack[STACK_SIZE];
-const char* short_options = "f:h:c:e:v:u:";
+const char* short_options = "f:h:c:e:v:u:m:s:p:q:";
 const struct option long_options[] = {
   {"rootfs",  required_argument, NULL, 'f'},
   {"hostname", required_argument, NULL, 'h'},
@@ -29,12 +33,24 @@ const struct option long_options[] = {
   {"environment", required_argument, NULL, 'e'},
   {"volume", required_argument, NULL, 'v'},
   {"user", required_argument, NULL, 'u'},
+  {"memory", required_argument, NULL, 'm'},
+  {"cpu_shares", required_argument, NULL, 's'},
+  {"cpu_period", required_argument, NULL, 'p'},
+  {"cpu_quota", required_argument, NULL, 'q'},
   {0, 0, 0, 0 }
 };
 
-char* hostname;
+char* hostname = "";
 
-char* rootfs;
+char* rootfs = "";
+
+char* memory = "";
+
+char* cpu_shares = "";
+
+char* cpu_period = "";
+
+char* cpu_quota = "";
 
 char* container_args[MAX_ARGV_SIZE] = {NULL};
 
@@ -43,6 +59,12 @@ char *env[MAX_ENV_SIZE] = {NULL};
 char *vol[MAX_VOL_COUNT] = {NULL};
 
 int pipefd[2];
+
+void generate_uuid(char* uuid) {
+  uuid_t out;
+  uuid_generate(out);
+  uuid_unparse(out, uuid);
+}
 
 void set_map(char* file, int inside_id, int outside_id, int len) {
   FILE* mapfd = fopen(file, "w");
@@ -113,21 +135,51 @@ void set_default_mount(char *rootfsPath) {
   }
 }
 
+int set_cgroup(char* cgroupScript, char* uuid,int pid, char* memory,
+    char* cpu_shares, char* cpu_period, char* cpu_quota) {
+  char command[MAX_COMMAND_LENGTH];
+  snprintf(command, MAX_COMMAND_LENGTH, "%s %s %d", cgroupScript, uuid, pid);
+
+  char buf[MAX_COMMAND_LENGTH];
+  if (strcmp("", memory) != 0) {
+    snprintf(buf, MAX_COMMAND_LENGTH, " -m %s", memory);
+    strncat(command, buf, MAX_COMMAND_ARG_LENGTH);
+  }
+  if (strcmp("", cpu_shares) != 0) {
+    snprintf(buf, MAX_COMMAND_LENGTH, " -s %s", cpu_shares);
+    strncat(command, buf, MAX_COMMAND_ARG_LENGTH);
+  }
+  if (strcmp("", cpu_period) != 0) {
+    snprintf(buf, MAX_COMMAND_LENGTH, " -p %s", cpu_period);
+    strncat(command, buf, MAX_COMMAND_ARG_LENGTH);
+  }
+  if (strcmp("", cpu_quota) != 0) {
+    snprintf(buf, MAX_COMMAND_LENGTH, " -q %s", cpu_quota);
+    strncat(command, buf, MAX_COMMAND_ARG_LENGTH);
+  }
+  return system(command);
+}
+
 void set_hostname(char *hostname) {
   sethostname(hostname, strlen(hostname));
 }
 
 int container_main(void* arg) {
   char ch;
+
   close(pipefd[1]);
   read(pipefd[0], &ch, 1);
 
   set_default_mount(rootfs);
   set_hostname(hostname);
-  return execvpe(container_args[0], container_args, env);
+
+  // unshare the host user namespace after mounting /dev
+  unshare(CLONE_NEWUSER);
+  //return execvpe(container_args[0], container_args, env);
+  return execv(container_args[0], container_args);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char ** argv) {
   int clone_flag = SIGCHLD;
 
   int option_index = 0;
@@ -167,6 +219,18 @@ int main(int argc, char **argv) {
       case 'v':
         vol[vI++] = optarg;
         vol[vI] = NULL;
+        break;
+      case 'm':
+        memory = optarg;
+        break;
+      case 's':
+        cpu_shares = optarg;
+        break;
+      case 'p':
+        cpu_period = optarg;
+        break;
+      case 'q':
+        cpu_quota = optarg;
         break;
       case 'u':
         user = strtok(optarg, ":");
@@ -210,16 +274,24 @@ int main(int argc, char **argv) {
   clone_flag = clone_flag | CLONE_NEWIPC;
   clone_flag = clone_flag | CLONE_NEWUTS;
   clone_flag = clone_flag | CLONE_NEWNET;
-  clone_flag = clone_flag | CLONE_NEWUSER;
 
   pipe(pipefd);
+
+  char uuid[37];
+  generate_uuid(uuid);
 
   int container_pid = clone(container_main, container_stack + STACK_SIZE,
       clone_flag, NULL);
   set_uid_map(container_pid, (int) uid, getuid(), 1);
   set_gid_map(container_pid, (int) gid, getgid(), 1);
 
-  printf("Container PID : %d\n", container_pid);
+  int cgroupExitCode = set_cgroup("./cgroup.sh",uuid, container_pid,
+      memory, cpu_shares, cpu_period, cpu_quota);
+  if (cgroupExitCode != 0) {
+    printf("Fail to set cgroup\n");
+    return 1;
+  }
+  printf("Container PID : %d, UUID : %s\n", container_pid, uuid);
 
   close(pipefd[1]);
 
