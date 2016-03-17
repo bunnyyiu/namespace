@@ -18,6 +18,7 @@
 #define MAX_ARGV_SIZE 256
 #define MAX_ENV_SIZE 256
 #define MAX_VOL_COUNT 256
+#define MAX_PATH_LENGTH 256
 
 char container_stack[STACK_SIZE];
 const char* short_options = "f:h:c:e:v:u:";
@@ -54,19 +55,19 @@ void set_map(char* file, int inside_id, int outside_id, int len) {
 }
 
 void set_uid_map(pid_t pid, int inside_id, int outside_id, int len) {
-  char file[256];
+  char file[MAX_PATH_LENGTH];
   sprintf(file, "/proc/%d/uid_map", pid);
   set_map(file, inside_id, outside_id, len);
 }
 
 void set_gid_map(pid_t pid, int inside_id, int outside_id, int len) {
-  char file[256];
+  char file[MAX_PATH_LENGTH];
   sprintf(file, "/proc/%d/gid_map", pid);
   set_map(file, inside_id, outside_id, len);
 }
 
 void set_default_mount(char *rootfsPath) {
-  char buf[256];
+  char buf[MAX_PATH_LENGTH];
   //remount "/proc" to make sure the "top" and "ps" show container's information
   snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, "proc");
   if (mount("proc", buf, "proc", 0, NULL) != 0) {
@@ -102,7 +103,6 @@ void set_default_mount(char *rootfsPath) {
     char *src = strtok(vol[vI], ":");
     char *target = strtok(NULL, ":");
     snprintf(buf, sizeof(buf), "%s/%s", rootfsPath, target);
-    printf("mount %s to %s %s\n", src, target, buf);
     if (mount(src, buf, "none", MS_BIND, NULL) != 0) {
       perror(vol[vI]);
     }
@@ -121,8 +121,9 @@ int container_main(void* arg) {
   char ch;
   close(pipefd[1]);
   read(pipefd[0], &ch, 1);
-  set_hostname(hostname);
+
   set_default_mount(rootfs);
+  set_hostname(hostname);
   return execvpe(container_args[0], container_args, env);
 }
 
@@ -137,11 +138,12 @@ int main(int argc, char **argv) {
   char* group;
   long int uid = 0;
   long int gid = 0;
-  struct passwd *result;
-  struct group *result2;
+  struct passwd *passwdResult;
+  struct group *groupResult;
 
   while (1) {
-    int c = getopt_long(argc, argv, short_options, long_options, &option_index);
+    int c = getopt_long(argc, argv, short_options, long_options,
+        &option_index);
     if (c == -1) {
       break;
     }
@@ -173,14 +175,16 @@ int main(int argc, char **argv) {
         gid = strtol(group, NULL, 10);
 
         if (uid == 0L) {
-          result = getpwnam(user);
-          uid = result->pw_uid;
+          // Search in /etc/passwd
+          passwdResult = getpwnam(user);
+          uid = passwdResult->pw_uid;
           if (gid == 0L) {
             if (group == "" ) {
-              gid = result->pw_gid;
+              gid = passwdResult->pw_gid;
             } else {
-              result2 = getgrnam(group);
-              gid = result2->gr_gid;
+              // Search in /etc/group
+              groupResult = getgrnam(group);
+              gid = groupResult->gr_gid;
             }
           }
         }
@@ -214,6 +218,8 @@ int main(int argc, char **argv) {
       clone_flag, NULL);
   set_uid_map(container_pid, (int) uid, getuid(), 1);
   set_gid_map(container_pid, (int) gid, getgid(), 1);
+
+  printf("Container PID : %d\n", container_pid);
 
   close(pipefd[1]);
 
