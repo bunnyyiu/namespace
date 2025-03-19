@@ -1,4 +1,4 @@
-#A simple program used to study Linux namespace and cgroup.
+# A simple program used to study Linux namespace and cgroup.
 ref : http://coolshell.cn/articles/17010.html
 
 * To compile
